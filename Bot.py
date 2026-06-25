@@ -133,7 +133,7 @@ async def check_status(m: types.Message):
     appeals = get_user_appeals(m.from_user.id)
     
     if not appeals:
-        await m.answer("Sizda hech qanday murojaat maqjud emas.")
+        await m.answer("Sizda hech qanday murojaat mavjud emas.")
         return
 
     user_appeals = [
@@ -253,7 +253,7 @@ async def final(m: types.Message, state: FSMContext):
     )
     await state.clear()
 
-# ================= ADMIN PROCESS (ID ORQALI BOSHQARISH) =================
+# ================= ADMIN PROCESS =================
 @dp.message(F.chat.id == ADMIN_ID, F.text.regexp(r'^\d{4}$'))
 async def admin_find_appeal(m: types.Message):
     appeal_id = m.text.strip()
