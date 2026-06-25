@@ -7,7 +7,6 @@ on:
     - cron: '0 */5 * * *'
   workflow_dispatch:
 
-# Agarda yangi o'zgarish yuklansa, eski ishlab turgan botni avtomatik o'chiradi!
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
