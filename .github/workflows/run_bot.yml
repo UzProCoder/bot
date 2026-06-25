@@ -4,9 +4,13 @@ on:
   push:
     branches: [ main, master ]
   schedule:
-    # Har 5 soatda workflow-ni avtomatik qayta start qilish
     - cron: '0 */5 * * *'
-  workflow_dispatch: # Qo'lda yoqish imkoniyati
+  workflow_dispatch:
+
+# Agarda yangi o'zgarish yuklansa, eski ishlab turgan botni avtomatik o'chiradi!
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
@@ -30,6 +34,8 @@ jobs:
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         ADMIN_ID: ${{ secrets.ADMIN_ID }}
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       run: |
         python Bot.py &
         BOT_PID=$!
