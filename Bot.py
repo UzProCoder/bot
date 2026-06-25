@@ -1,8 +1,7 @@
 import asyncio
 import logging
-import json
-import os
 import random
+import os
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
@@ -17,19 +16,22 @@ from aiogram.types import (
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from supabase import create_client, Client
 
 # ================= CONFIG =================
-import os
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8755067971:AAGNL44QVSbhFF5Ph25ct8qMZNoq1u_dRXc")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 1973341892))
-DB_FILE = "murojaatlar.json"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("gls_bot")
+
+# Supabase Mijozini ulash
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MFY_LIST = [
     "Boyovut", "Terakzor", "Oltin Vodiy", "Furqat", "Sharq Haqiqati",
@@ -53,25 +55,25 @@ SKIP_TEXT = "⏭ O'tkazish"
 CONTACT_BUTTON_TEXT = "📱 Kontakt yuborish"
 MFY_PER_PAGE = 6
 
-# ================= JSON BAZA BILAN ISHLASH =================
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+# ================= SUPABASE BAZA BILAN ISHLASH =================
+def get_appeal(appeal_id: str):
+    response = supabase.table("murojaatlar").select("*").eq("appeal_id", appeal_id).execute()
+    return response.data[0] if response.data else None
 
-def save_db(data):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def get_user_appeals(user_id: int):
+    response = supabase.table("murojaatlar").select("*").eq("user_id", user_id).execute()
+    return response.data
+
+def insert_appeal(data: dict):
+    supabase.table("murojaatlar").insert(data).execute()
+
+def update_appeal_status(appeal_id: str, status: str, reason: str = ""):
+    supabase.table("murojaatlar").update({"status": status, "reason": reason}).eq("appeal_id", appeal_id).execute()
 
 def generate_unique_id():
-    db = load_db()
     while True:
         short_id = str(random.randint(1000, 9999))
-        if short_id not in db:
+        if not get_appeal(short_id):
             return short_id
 
 # ================= STATES =================
@@ -128,14 +130,18 @@ async def start(m: types.Message, state: FSMContext):
 
 @dp.message(F.text == "/holat")
 async def check_status(m: types.Message):
-    db = load_db()
-    user_id = str(m.from_user.id)
-    user_appeals = [f"🆔 **{aid}**\n📂 Toifa: {info['category']}\n🟢 Status: {info['status']}" + (f"\n⚠️ Sabab: {info['reason']}" if info.get('reason') else "") for aid, info in db.items() if str(info['user_id']) == user_id]
+    appeals = get_user_appeals(m.from_user.id)
     
-    if not user_appeals:
+    if not appeals:
         await m.answer("Sizda hech qanday murojaat mavjud emas.")
-    else:
-        await m.answer("📋 Sizning murojaatlaringiz:\n\n" + "\n\n---\n\n".join(user_appeals), parse_mode="Markdown")
+        return
+
+    user_appeals = [
+        f"🆔 **{app['appeal_id']}**\n📂 Toifa: {app['category']}\n🟢 Status: {app['status']}" + 
+        (f"\n⚠️ Sabab: {app['reason']}" if app.get('reason') else "") 
+        for app in appeals
+    ]
+    await m.answer("📋 Sizning murojaatlaringiz:\n\n" + "\n\n---\n\n".join(user_appeals), parse_mode="Markdown")
 
 @dp.message(Form.fio, F.text)
 async def fio(m: types.Message, state: FSMContext):
@@ -210,9 +216,9 @@ async def final(m: types.Message, state: FSMContext):
     data = await state.get_data()
     appeal_id = generate_unique_id()
 
-    # JSON bazaga saqlash
-    db = load_db()
-    db[appeal_id] = {
+    # Supabase-ga saqlash
+    insert_appeal({
+        "appeal_id": appeal_id,
         "user_id": m.from_user.id,
         "fio": data.get('fio'),
         "mfy": data.get('mfy'),
@@ -220,12 +226,9 @@ async def final(m: types.Message, state: FSMContext):
         "phone": data.get('phone'),
         "extra": data.get('extra'),
         "text": appeal_text,
-        "status": "Yuborildi",
-        "reason": ""
-    }
-    save_db(db)
+        "status": "Yuborildi"
+    })
 
-    # Adminga xabar yuborish
     admin_text = (
         f"📨 YANGI MUROJAAT\n\n"
         f"🆔 ID: {appeal_id}\n"
@@ -254,13 +257,12 @@ async def final(m: types.Message, state: FSMContext):
 @dp.message(F.chat.id == ADMIN_ID, F.text.regexp(r'^\d{4}$'))
 async def admin_find_appeal(m: types.Message):
     appeal_id = m.text.strip()
-    db = load_db()
+    app = get_appeal(appeal_id)
     
-    if appeal_id not in db:
+    if not app:
         await m.answer("❌ Bunday ID ga ega murojaat topilmadi.")
         return
         
-    app = db[appeal_id]
     info_text = (
         f"📋 MUROJAAT MA'LUMOTLARI ({appeal_id})\n\n"
         f"👤 F.I.SH: {app['fio']}\n"
@@ -278,13 +280,12 @@ async def admin_find_appeal(m: types.Message):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("adm_accept|"))
 async def admin_accept(call: types.CallbackQuery):
     appeal_id = call.data.split("|")[1]
-    db = load_db()
-    if appeal_id in db:
-        db[appeal_id]["status"] = "Qabul qilindi"
-        save_db(db)
+    app = get_appeal(appeal_id)
+    if app:
+        update_appeal_status(appeal_id, "Qabul qilindi")
         await call.message.edit_text(call.message.text + "\n\n🟢 Status o'zgartirildi: Qabul qilindi")
         try:
-            await bot.send_message(db[appeal_id]["user_id"], f"✅ Sizning {appeal_id}-sonli murojaatingiz admin tomonidan QABUL QILINDI.")
+            await bot.send_message(app["user_id"], f"✅ Sizning {appeal_id}-sonli murojaatingiz admin tomonidan QABUL QILINDI.")
         except Exception:
             pass
     await call.answer()
@@ -303,14 +304,12 @@ async def admin_reject_reason_received(m: types.Message, state: FSMContext):
     appeal_id = state_data.get("reject_id")
     reason = m.text.strip()
     
-    db = load_db()
-    if appeal_id in db:
-        db[appeal_id]["status"] = "Rad etildi"
-        db[appeal_id]["reason"] = reason
-        save_db(db)
+    app = get_appeal(appeal_id)
+    if app:
+        update_appeal_status(appeal_id, "Rad etildi", reason)
         await m.answer(f"❌ Murojaat rad etildi. Sababi foydalanuvchiga yuborildi.")
         try:
-            await bot.send_message(db[appeal_id]["user_id"], f"❌ Sizning {appeal_id}-sonli murojaatingiz RAD ETILDI.\n⚠️ Sababi: {reason}")
+            await bot.send_message(app["user_id"], f"❌ Sizning {appeal_id}-sonli murojaatingiz RAD ETILDI.\n⚠️ Sababi: {reason}")
         except Exception:
             pass
     await state.clear()
@@ -318,13 +317,12 @@ async def admin_reject_reason_received(m: types.Message, state: FSMContext):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("adm_close|"))
 async def admin_close(call: types.CallbackQuery):
     appeal_id = call.data.split("|")[1]
-    db = load_db()
-    if appeal_id in db:
-        db[appeal_id]["status"] = "Hal etildi"
-        save_db(db)
+    app = get_appeal(appeal_id)
+    if app:
+        update_appeal_status(appeal_id, "Hal etildi")
         await call.message.edit_text(call.message.text + "\n\n🏁 Murojaat yopildi: Hal etildi")
         try:
-            await bot.send_message(db[appeal_id]["user_id"], f"🏁 Sizning {appeal_id}-sonli murojaatingiz yuzasidan javob berildi va muammo HAL ETILDI. Rahmat!")
+            await bot.send_message(app["user_id"], f"🏁 Sizning {appeal_id}-sonli murojaatingiz yuzasidan javob berildi va muammo HAL ETILDI. Rahmat!")
         except Exception:
             pass
     await call.answer()
@@ -338,8 +336,8 @@ async def fallback(m: types.Message):
         await m.answer("Murojaat yuborish uchun /start , holatni tekshirish uchun /holat buyrug'ini bosing.")
 
 async def main():
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        raise RuntimeError("Iltimos, BOT_TOKEN ni o'zgartiring!")
+    if not BOT_TOKEN:
+        raise RuntimeError("Iltimos, BOT_TOKEN Actions Secrets-ga yuklang!")
     logger.info("Bot ishga tushdi.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
